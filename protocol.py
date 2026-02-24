@@ -15,7 +15,7 @@ This module includes the following:
     
 """
 
-# library imports
+# Python Library imports
 import struct
 import zlib
 
@@ -34,7 +34,8 @@ class ErrorCode:
     SESSION_MISMATCH = 2    # Session ID in the packet does not match any active session on the server 
     CHECKSUM_FAILURE = 3    # Checksum validation failed, indicating potential data corruption
     UNKNOWN_PACKET_TYPE = 4 # Received a packet with an unrecognized type
-
+    CONNECTION_TIMEOUT = 5  # No response received within the expected time frame, indicating a potential connection issue
+    
 class Packet:
     # Header Format: ! - Network byte order (big-endian)
     #                B - Packet Type (1 byte)
@@ -80,7 +81,6 @@ class Packet:
         if len(data) < cls.HEADER_SIZE:
            return None # Not enough data to unpack the header, indicating a malformed packet
        
-        
         header = data[:cls.HEADER_SIZE]
         packet_type, session_id, sequence_number, payload_length, checksum = struct.unpack(cls.HEADER_FORMAT, header)
         
@@ -113,8 +113,8 @@ class Packet:
         return f"Packet[{t_name}] SessionID:{self.session_id} | SeqNum: {self.sequence_number}| Size: {len(self.payload)} | Checksum: {self.checksum}"
 
 # Factory functions for creating different types of packets. 
-def create_syn_packet(session_id, sequence_number):
-    return Packet(PacketType.SYN, session_id, sequence_number)
+def create_syn_packet(session_id, sequence_number, payload=b""):
+    return Packet(PacketType.SYN, session_id, sequence_number, payload)
 
 def create_syn_ack_packet(session_id, sequence_number):
     return Packet(PacketType.SYN_ACK, session_id, sequence_number)
