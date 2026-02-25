@@ -18,12 +18,10 @@ This file works together with protocol.py for packet creation and parsing, engin
 
 """
 
-# Python Library imports
 import socket
 import os
 import random
 
-# Local imports
 from config import SERVER_IP, SERVER_PORT, TIMEOUT
 from protocol import (
     Packet, ErrorCode,
@@ -34,10 +32,6 @@ from engine import send_file, receive_file
 
 
 def parse_syn_payload(payload):
-    
-    # Expected SYN payload: "UPLOAD|filename" "DOWNLOAD|filename"
-    # Returns: command, filename (or None, None if invalid)
-    
     try:
         text = payload.decode("utf-8")
         parts = text.split("|", 1)
@@ -50,7 +44,6 @@ def parse_syn_payload(payload):
 
         if command not in ["UPLOAD", "DOWNLOAD"]:
             return None, None
-
         if filename == "":
             return None, None
 
@@ -60,9 +53,6 @@ def parse_syn_payload(payload):
 
 
 def generate_session_id(used_ids):
- 
-    # Generates a random 16-bit session ID 
-  
     while True:
         sid = random.randint(1, 65535)
         if sid not in used_ids:
@@ -73,7 +63,6 @@ def main():
     server_addr = (SERVER_IP, SERVER_PORT)
     print(f"-> Server starting on {server_addr}")
 
-    # Sessions tracked by client (ip, port) -> session_id
     sessions = {}
     used_session_ids = set()
 
@@ -91,20 +80,8 @@ def main():
             if not packet:
                 continue
 
-             
-            # HANDSHAKE  
+            # HANDSHAKE
             if packet.is_syn():
-                # Special case: DISCOVER broadcast
-                raw_text = packet.payload.decode("utf-8", errors="ignore").strip().upper()
-                if raw_text == "DISCOVER":
-                    print(f"\n<- DISCOVER received from {client_addr}")
-                    # Reply with SYN-ACK so the client can detect the server
-                    sid = generate_session_id(used_session_ids)
-                    syn_ack = create_syn_ack_packet(session_id=sid, sequence_number=0)
-                    sock.sendto(syn_ack.pack(), client_addr)
-                    print("-> Sent SYN-ACK (DISCOVER reply)")
-                    continue
-
                 command, filename = parse_syn_payload(packet.payload)
 
                 if not command:
@@ -126,8 +103,7 @@ def main():
                 sock.sendto(syn_ack.pack(), client_addr)
                 print("-> Sent SYN-ACK")
 
-      
-                # FILE OPERATION 
+                # FILE OPERATION
                 if command == "UPLOAD":
                     save_name = f"uploaded_{os.path.basename(filename)}"
                     ok = receive_file(sock, save_name, session_id, client_addr)
@@ -161,8 +137,8 @@ def main():
                     sessions.pop(client_addr, None)
                     used_session_ids.discard(session_id)
                     continue
- 
-            # SESSION MISMATCH CHECK
+
+            # SESSION CHECK for non-SYN packets
             known_session = sessions.get(client_addr)
             if known_session is None or packet.session_id != known_session:
                 print(f"XX Session mismatch from {client_addr}. Sending ERROR.")
@@ -170,7 +146,6 @@ def main():
                 sock.sendto(err_packet.pack(), client_addr)
                 continue
 
-            # DATA/ACK/FIN should be handled inside engine.send_file/receive_file
             print(f"!! Unexpected packet from {client_addr}: {packet}")
 
 
