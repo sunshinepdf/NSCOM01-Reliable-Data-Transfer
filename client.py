@@ -183,6 +183,8 @@ def main():
     print("\n")
     
     args = parser.parse_args()
+    
+    server_addr = (socket.gethostbyname(args.server), args.port)
 
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.settimeout(config.TIMEOUT)
@@ -204,5 +206,11 @@ def main():
 
         menu_loop(sock, server_addr, active_session_id)
 
+        # State 3: Termination - After the file transfer is complete, the client checks the success status and prints a final message indicating whether the transfer finished successfully or was aborted due to errors.
+        if transfer_success:
+            print("\n-> Client finished successfully.")
+        else:
+            print("\nXX Client aborted due to errors.")
+            
 if __name__ == "__main__":
     main()
