@@ -14,21 +14,25 @@ The client performs the following steps:
 
 The client relies on the Packet class and related constants defined in protocol.py, as well as configuration parameters from config.py.
 """
-
+# Python Library imports
 import socket
 import argparse
 import sys
 import os
 import config
 
+# Local imports
 from engine import send_file, receive_file
 from protocol import Packet, PacketType, Logger, create_syn_packet
 
+# Function for connecting to the server and performing the handshake
 def connect_to_server(sock, server_addr):
+    
     Logger.info(f"Connecting to {server_addr}...")
     syn = create_syn_packet(session_id=0, sequence_number=0, payload=b"CONNECT")
     retries = 0
     
+    # Attempt to connect and perform handshake with retries
     while retries < config.MAX_RETRIES:
         sock.sendto(syn.pack(), server_addr)
         try:
@@ -37,41 +41,54 @@ def connect_to_server(sock, server_addr):
             
             Logger.received(packet)
             
+            # Check if we received a SYN-ACK with a valid session ID
             if packet and packet.packet_type == PacketType.SYN_ACK:
                 Logger.info(f"Connected Successfully! Assigned Session ID: {packet.session_id}")
                 return packet.session_id
+            
+        # Handle timeouts and retry logic    
         except socket.timeout:
             retries += 1
             Logger.warn(f"Timeout waiting for connection. Retrying... ({retries}/{config.MAX_RETRIES})")
             
     return None
 
+# Function to handle the menu loop for user commands and file transfers
 def run_single_command(sock, server_addr, session_id, command, filename):
+    
     Logger.info(f"Starting File Transfer (Sending SYN for {command.upper()})...")
     
     file_size = 0
+    
+    # For uploads, the program checks if the file exists and get its size before sending the SYN packet to the server.
+    # For downloads, the SYN is just sent and the client waits for the SYN-ACK from the server. 
     if command == "upload":
         if not os.path.exists(filename):
             Logger.error(f"File {filename} does not exist.")
             return False
         file_size = os.path.getsize(filename)
 
+    # The payload of the SYN packet includes the command, filename, and file size (for uploads) in a structured format.
     payload_str = f"{command.upper()}|{filename}|{file_size}"
     syn_packet = create_syn_packet(session_id, 0, payload_str.encode("utf-8"))
     
     retries = 0
     syn_ack_packet = None
 
+    # The client will send the SYN packet and wait for a SYN-ACK response from the server. 
+    # If it does not receive a response within the timeout period, it will retry sending the SYN packet up to a maximum number of retries defined in the configuration. 
+    # If it receives a SYN-ACK, it will proceed with the file transfer based on the command (upload or download). 
+    # If it fails to receive a SYN-ACK after all retries, it will log an error and return False to indicate that the transfer was aborted.
     while retries < config.MAX_RETRIES:
         sock.sendto(syn_packet.pack(), server_addr)
         try:
             data, addr = sock.recvfrom(4096)
-            if addr != server_addr: continue
+            if addr != server_addr: continue # Ignore packets from unknown sources
             
             packet = Packet.unpack(data)
-            if not packet: continue
+            if not packet: continue # Ignore malformed packets
             
-            if packet.is_error():
+            if packet.is_error(): # Handle error packets from the server
                 err_code = packet.payload[0]
                 err_msg = {
                     1: "FILE NOT FOUND", 
@@ -83,7 +100,8 @@ def run_single_command(sock, server_addr, session_id, command, filename):
                 
                 Logger.error(f"Server returned Error: {err_msg}")
                 return False
-                
+            
+            # Check if we received a SYN-ACK with the correct session ID  
             if packet.packet_type == PacketType.SYN_ACK:
                 if packet.session_id != session_id:
                     Logger.warn(
@@ -92,23 +110,30 @@ def run_single_command(sock, server_addr, session_id, command, filename):
                     continue
                 syn_ack_packet = packet
                 break
+        
+        # Handle timeouts and retry logic
         except socket.timeout:
             retries += 1
             Logger.warn(f"Timeout waiting for SYN-ACK. Retrying... ({retries}/{config.MAX_RETRIES})")
 
+    # If we exhausted all retries without receiving a valid SYN-ACK, log an error and return False to indicate that the transfer was aborted.
     if not syn_ack_packet:
         Logger.error(f"Handshake failed. Transfer cancelled.")
         return False
 
+    # If we received a valid SYN-ACK, we proceed with the file transfer based on the command.
     if command == "upload":
         return send_file(sock, filename, session_id, server_addr)
+    
     elif command == "download":
         server_filesize = int(syn_ack_packet.payload.decode("utf-8")) if syn_ack_packet.payload else 0
         Logger.info(f"Server reports file size: {server_filesize} bytes")
         save_name = f"downloaded_{filename}"
         return receive_file(sock, save_name, session_id, server_addr)
 
+# Function to display the menu and handle user input for file transfer commands
 def menu_loop(sock, server_addr, session_id):
+    transfer_success = True
     while True:
         print("\n" + "="*25)
         print("      CLIENT MENU")
@@ -124,10 +149,10 @@ def menu_loop(sock, server_addr, session_id):
 
         if choice == "1":
             filename = input("Enter filename to download: ").strip()
-            run_single_command(sock, server_addr, session_id, "download", filename)
+            transfer_success = run_single_command(sock, server_addr, session_id, "download", filename)
         elif choice == "2":
             filename = input("Enter filename to upload: ").strip()
-            run_single_command(sock, server_addr, session_id, "upload", filename)
+            transfer_success = run_single_command(sock, server_addr, session_id, "upload", filename)
         elif choice == "3":
             Logger.info("Disconnecting from server...")
             disconnect_packet = create_syn_packet(session_id, 0, b"DISCONNECT")
@@ -146,7 +171,10 @@ def menu_loop(sock, server_addr, session_id):
             Logger.demo(f"Session Mismatch Simulation is now {'ENABLED' if config.SIMULATE_MISMATCH else 'DISABLED'}")
         else:
             Logger.warn("Invalid choice.")
+    
+    return transfer_success
 
+# Function to discover the server on the local network using a broadcast message
 def discover_server(port):
     print("-> Discovering server...")
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as bsock:
@@ -162,6 +190,7 @@ def discover_server(port):
         except socket.timeout:
             return None
 
+# Main function to parse command-line arguments, establish connection with the server, and start the menu loop for file transfers
 def main():
     parser = argparse.ArgumentParser(description="Reliable UDP File Transfer Client")
     
@@ -204,9 +233,8 @@ def main():
             Logger.error(f"Failed to establish session with server {server_addr}. Exiting.")
             sys.exit(1)
 
-        menu_loop(sock, server_addr, active_session_id)
+        transfer_success = menu_loop(sock, server_addr, active_session_id)
 
-        # State 3: Termination - After the file transfer is complete, the client checks the success status and prints a final message indicating whether the transfer finished successfully or was aborted due to errors.
         if transfer_success:
             print("\n-> Client finished successfully.")
         else:

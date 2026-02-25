@@ -18,8 +18,6 @@ This module includes the following:
 # Python Library imports
 import struct
 import zlib
-import random
-import config
 
 class PacketType:
     SYN = 1         # Connection initiation

@@ -13,7 +13,7 @@ The functions in this module are designed to be used by both the Client and Serv
 The module relies on the Packet class and related constants defined in protocol.py, as well as configuration parameters from config.py.
 """
 
-# Library imports
+# Python Library imports
 import socket
 import os
 import random
@@ -166,6 +166,7 @@ def send_file(sock, filename, session_id, target_addr):
     Logger.info(f"File '{filename}' transferred successfully.")
     return True
 
+# Function to manage the process of receiving a file, including acknowledgment of received packets and handling connection termination.
 def receive_file(sock, save_filename, session_id, expected_addr):
     Logger.info(f"Receiving file from {expected_addr}, saving file as '{save_filename}'...")
     
@@ -180,9 +181,11 @@ def receive_file(sock, save_filename, session_id, expected_addr):
         while True:
             try:
                 data, sender_addr = sock.recvfrom(4096)
-                if sender_addr != expected_addr: continue
+                if sender_addr != expected_addr: continue 
                 
                 packet = Packet.unpack(data)
+                
+                # Ignore malformed packets that fail unpacking or checksum validation
                 if not packet:
                     if len(data) >= Packet.HEADER_SIZE:
                         try:
@@ -205,6 +208,8 @@ def receive_file(sock, save_filename, session_id, expected_addr):
                 
                 Logger.received(packet)
 
+                # Validate session ID to ensure the packet belongs to the current transfer session. 
+                # If there is a mismatch, send an error packet back to the sender and ignore the packet.
                 if packet.session_id != session_id:
                     Logger.warn(
                         f"Session mismatch in incoming packet (expected {session_id}, got {packet.session_id}). Packet dropped."
@@ -214,18 +219,22 @@ def receive_file(sock, save_filename, session_id, expected_addr):
                     sock.sendto(mismatch_error.pack(), expected_addr)
                     continue
                 
+                # Handle error packets received from the sender, logging the error message and aborting the reception if a critical error is reported.
                 if packet.is_error():
                     err_code = packet.payload[0]
                     err_msg = {1: "FILE NOT FOUND", 2: "SESSION MISMATCH", 3: "CHECKSUM ERROR", 4: "UNKNOWN PACKET TYPE", 5: "CONNECTION TIMEOUT"}.get(err_code, "UNKNOWN")
                     Logger.error(f"Received error from sender: {err_msg}")
                     return False
                 
+                # If the packet is a DATA packet, check if it is the expected sequence number. 
+                # If it is a duplicate (sequence number less than expected), resend the ACK for that sequence number.
                 if packet.sequence_number < expected_seq:
                     ack_packet = create_ack_packet(session_id, packet.sequence_number)
                     Logger.sent(ack_packet)
                     sock.sendto(ack_packet.pack(), expected_addr)
                     continue
                 
+                # If the packet is a DATA packet with the expected sequence number, write the payload to the file, send an ACK for that sequence number, and increment the expected sequence number.
                 if packet.is_data() and packet.sequence_number == expected_seq:
                     ack_packet = create_ack_packet(session_id, expected_seq)
                     sock.sendto(ack_packet.pack(), expected_addr)
@@ -241,12 +250,14 @@ def receive_file(sock, save_filename, session_id, expected_addr):
                     retries = 0
                     continue
                 
+                # If the packet is a FIN packet with the expected sequence number, send a FIN-ACK to confirm successful reception of the entire file and end the transfer session.
                 if packet.is_fin() and packet.sequence_number == expected_seq:
                     Logger.info(f"Received FIN packet. Sending FIN-ACK and ending file transfer.")
                     fin_ack_packet = create_fin_ack_packet(session_id, expected_seq)
                     sock.sendto(fin_ack_packet.pack(), expected_addr)
                     return True
-                
+           
+           # Handle unexpected packets that do not match the expected sequence number or packet type, sending appropriate error responses and ignoring the packets.     
             except socket.timeout:
                 retries += 1
                 if retries > MAX_RETRIES:

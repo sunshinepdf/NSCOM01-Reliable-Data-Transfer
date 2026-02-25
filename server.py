@@ -17,13 +17,14 @@ The server does the following:
 This file works together with protocol.py for packet creation and parsing, engine.py for reliable send and receive logic, and config.py for server settings like IP, port, and timeout.
 
 """
-
+# Python Library imports
 import socket
 import os
 import random
 import threading
 import config
 
+# Local imports
 from config import SERVER_IP, SERVER_PORT
 from protocol import (
     Packet, ErrorCode, PacketType, Logger,
@@ -32,6 +33,8 @@ from protocol import (
 )
 from engine import send_file, receive_file
 
+# Server console loop to allow toggling of simulation flags for testing purposes (packet loss, corruption, session mismatch) and to display current status of these flags. 
+# This runs in a separate thread to allow real-time control while the server is running.
 def server_console_loop():
     print("\n[SERVER CONTROLS]")
     print("Type one of the following anytime:")
@@ -80,6 +83,7 @@ def server_console_loop():
         except Exception as e:
             Logger.warn(f"Server control input error: {e}")
 
+# Helper function to parse the payload of a SYN packet to extract the command (UPLOAD, DOWNLOAD, CONNECT, DISCONNECT), filename, and filesize.
 def parse_syn_payload(payload):
     
     if payload == b"CONNECT":
@@ -100,6 +104,8 @@ def parse_syn_payload(payload):
     except:
         return None, None, 0
 
+# Main server loop to listen for incoming packets, handle the handshake process, 
+# and manage file upload/download requests while maintaining session integrity and sending appropriate responses back to the client.
 def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((SERVER_IP, SERVER_PORT))
@@ -127,6 +133,8 @@ def main():
             if packet.packet_type == PacketType.SYN:
                 command, filename, filesize = parse_syn_payload(packet.payload)
 
+                # Handle the initial SYN packet to establish a connection, creating a new session ID and 
+                # sending a SYN-ACK if the command is CONNECT, or sending an ERROR if the command is invalid.
                 if command == "CONNECT":
                     session_id = random.randint(1000, 9999)
                     while session_id in used_session_ids:
@@ -141,6 +149,8 @@ def main():
                     Logger.info(f"Connection Complete. Client {client_addr} connected. Session: {session_id}")
                     continue
                 
+                # Handle a DISCONNECT command by verifying the session ID and client address, then removing the session and sending a confirmation message. 
+                # If the session ID does not match, send an ERROR packet back to the client.
                 if command == "DISCONNECT":
                     known_session = sessions.get(client_addr)
                     if known_session == packet.session_id:
@@ -149,7 +159,9 @@ def main():
                         used_session_ids.discard(packet.session_id)
                         print(f"Waiting for client connections...")
                     continue
-
+                
+                # For UPLOAD and DOWNLOAD commands, first verify that the session ID in the SYN packet matches an active session for that client address.
+                # If the session ID is valid, proceed with the file transfer process. If not, send an ERROR packet indicating a session mismatch.
                 if command in ["UPLOAD", "DOWNLOAD"]:
                     if packet.session_id not in used_session_ids or sessions.get(client_addr) != packet.session_id:
                         Logger.error(f"XX Transfer request from unauthorized session. Sending ERROR.")
@@ -160,6 +172,7 @@ def main():
 
                     session_id = packet.session_id
 
+                    # If the command is UPLOAD, prepare to receive the file from the client and save it to disk. 
                     if command == "UPLOAD":
                         Logger.info(f"Agreed on UPLOAD for '{filename}' ({filesize} bytes).")
                         syn_ack = create_syn_ack_packet(session_id, 0)
@@ -171,7 +184,8 @@ def main():
                         else: Logger.error("Upload failed.")
 
                         continue
-
+                    
+                    # If the command is DOWNLOAD, check if the requested file exists and send it to the client.
                     if command == "DOWNLOAD":
                         if not os.path.exists(filename):
                             Logger.error(f"XX File '{filename}' not found. Sending ERROR.")
