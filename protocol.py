@@ -18,6 +18,8 @@ This module includes the following:
 # Python Library imports
 import struct
 import zlib
+import random
+import config
 
 class PacketType:
     SYN = 1         # Connection initiation
@@ -35,6 +37,42 @@ class ErrorCode:
     CHECKSUM_FAILURE = 3    # Checksum validation failed, indicating potential data corruption
     UNKNOWN_PACKET_TYPE = 4 # Received a packet with an unrecognized type
     CONNECTION_TIMEOUT = 5  # No response received within the expected time frame, indicating a potential connection issue
+
+class Colors:
+    BLUE = '\033[94m'    # Outgoing
+    GREEN = '\033[92m'   # Incoming
+    YELLOW = '\033[93m'  # Warning/Retry
+    RED = '\033[91m'     # Error
+    CYAN = '\033[96m'    # System/Handshake
+    MAGENTA = '\033[95m' # Demo simulation alerts
+    RESET = '\033[0m'
+
+class Logger:
+    @staticmethod
+    def sent(packet):
+        """Standard format for outgoing packets"""
+        print(f"{Colors.BLUE}<-- Sent:     {packet.log_str()}{Colors.RESET}")
+
+    @staticmethod
+    def received(packet):
+        """Standard format for incoming packets"""
+        print(f"{Colors.GREEN}--> Received: {packet.log_str()}{Colors.RESET}")
+
+    @staticmethod
+    def info(msg):
+        print(f"{Colors.CYAN}[INFO] {msg}{Colors.RESET}")
+
+    @staticmethod
+    def demo(msg):
+        print(f"{Colors.MAGENTA}[DEMO] {msg}{Colors.RESET}")
+
+    @staticmethod
+    def warn(msg):
+        print(f"{Colors.YELLOW}[WARN] {msg}{Colors.RESET}")
+
+    @staticmethod
+    def error(msg):
+        print(f"{Colors.RED}[FAIL] {msg}{Colors.RESET}")
     
 class Packet:
     # Header Format: ! - Network byte order (big-endian)
@@ -112,12 +150,49 @@ class Packet:
         t_name = type_names.get(self.packet_type, "UNKNOWN")
         return f"Packet[{t_name}] SessionID:{self.session_id} | SeqNum: {self.sequence_number}| Size: {len(self.payload)} | Checksum: {self.checksum}"
 
+    def log_str(self):
+        type_names = { 
+            1: "SYN", 2: "SYN-ACK", 3: "DATA", 4: "ACK", 
+            5: "FIN", 6: "FIN-ACK", 7: "ERROR" 
+        }
+        t_name = type_names.get(self.packet_type, "UNKNOWN")
+        
+        # --- Standardized Feedback Logic ---
+        if self.packet_type == PacketType.SYN:
+            feedback = f"REQ: {self.payload.decode('utf-8') if self.payload else 'CONNECT'}"
+        
+        elif self.packet_type == PacketType.SYN_ACK:
+            feedback = "Handshake Accepted"
+        
+        elif self.packet_type == PacketType.DATA:
+            feedback = f"Content: {len(self.payload)} bytes"
+        
+        elif self.packet_type == PacketType.ACK:
+            feedback = f"Confirming Seq {self.sequence_number}"
+        
+        elif self.packet_type == PacketType.FIN:
+            feedback = "End of File reached"
+        
+        elif self.packet_type == PacketType.FIN_ACK:
+            feedback = "Termination Confirmed"
+            
+        elif self.packet_type == PacketType.ERROR:
+            err_code = self.payload[0] if self.payload else 0
+            err_msg = {1: "FILE_NOT_FOUND", 2: "SESSION_MISMATCH", 3: "CHECKSUM ERROR", 4: "UNKNOWN PACKET TYPE", 5: "CONNECTION TIMEOUT"}.get(err_code, "UNKNOWN")
+            feedback = f"!!! ERROR: {err_msg} !!!"
+        
+        else:
+            feedback = "No Payload"
+
+        # Format: [SID: 101 | SEQ: 5 | TYPE: DATA] -> Content: 1024 bytes
+        return f"[SID: {self.session_id:03} | SEQ: {self.sequence_number:02} | {t_name:7}] -> {feedback}"
+    
 # Factory functions for creating different types of packets. 
 def create_syn_packet(session_id, sequence_number, payload=b""):
     return Packet(PacketType.SYN, session_id, sequence_number, payload)
 
-def create_syn_ack_packet(session_id, sequence_number):
-    return Packet(PacketType.SYN_ACK, session_id, sequence_number)
+def create_syn_ack_packet(session_id, sequence_number, payload=b""):
+    return Packet(PacketType.SYN_ACK, session_id, sequence_number, payload)
 
 def create_data_packet(session_id, sequence_number, payload):
     return Packet(PacketType.DATA, session_id, sequence_number, payload)
@@ -133,4 +208,3 @@ def create_fin_ack_packet(session_id, sequence_number):
 
 def create_error_packet(session_id, error_code):
     return Packet(PacketType.ERROR, session_id, 0, payload=bytes([error_code]))
-

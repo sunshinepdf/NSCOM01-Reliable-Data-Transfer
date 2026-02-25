@@ -21,56 +21,100 @@ This file works together with protocol.py for packet creation and parsing, engin
 import socket
 import os
 import random
+import threading
+import config
 
-from config import SERVER_IP, SERVER_PORT, TIMEOUT
+from config import SERVER_IP, SERVER_PORT
 from protocol import (
-    Packet, ErrorCode,
+    Packet, ErrorCode, PacketType, Logger,
     create_syn_ack_packet,
     create_error_packet
 )
 from engine import send_file, receive_file
 
+def server_console_loop():
+    print("\n[SERVER CONTROLS]")
+    print("Type one of the following anytime:")
+    print("  loss      -> toggle packet loss simulation")
+    print("  corrupt   -> toggle checksum corruption simulation")
+    print("  mismatch  -> toggle session mismatch simulation")
+    print("  status    -> show current simulation flags")
+    print("  help      -> show controls\n")
+
+    while True:
+        try:
+            cmd = input().strip().lower()
+
+            if cmd == "loss":
+                config.SIMULATE_LOSS = not config.SIMULATE_LOSS
+                Logger.demo(f"[SERVER] Packet Loss Simulation: {'ENABLED' if config.SIMULATE_LOSS else 'DISABLED'}")
+
+            elif cmd == "corrupt":
+                config.SIMULATE_CORRUPTION = not config.SIMULATE_CORRUPTION
+                Logger.demo(
+                    f"[SERVER] Checksum Corruption Simulation: {'ENABLED' if config.SIMULATE_CORRUPTION else 'DISABLED'}"
+                )
+
+            elif cmd == "mismatch":
+                config.SIMULATE_MISMATCH = not config.SIMULATE_MISMATCH
+                Logger.demo(f"[SERVER] Session Mismatch Simulation: {'ENABLED' if config.SIMULATE_MISMATCH else 'DISABLED'}")
+
+            elif cmd == "status":
+                Logger.info(
+                    "[SERVER] Sim Flags -> "
+                    f"LOSS={config.SIMULATE_LOSS}, "
+                    f"CORRUPT={config.SIMULATE_CORRUPTION}, "
+                    f"MISMATCH={config.SIMULATE_MISMATCH}, "
+                    f"FAILURE_RATE={config.FAILURE_RATE}"
+                )
+
+            elif cmd == "help":
+                print("Commands: loss | corrupt | mismatch | status | help")
+
+            elif cmd:
+                Logger.warn("Unknown command. Type 'help' for options.")
+
+        except EOFError:
+            break
+        
+        except Exception as e:
+            Logger.warn(f"Server control input error: {e}")
 
 def parse_syn_payload(payload):
+    
+    if payload == b"CONNECT":
+        return "CONNECT", None, 0
+    if payload == b"DISCONNECT":
+        return "DISCONNECT", None, 0
     try:
         text = payload.decode("utf-8")
-        parts = text.split("|", 1)
-
-        if len(parts) != 2:
-            return None, None
+        parts = text.split("|")
 
         command = parts[0].strip().upper()
-        filename = parts[1].strip()
+        filename = parts[1].strip() if len(parts) > 1 else ""
+        filesize = int(parts[2].strip()) if len(parts) > 2 else 0
 
-        if command not in ["UPLOAD", "DOWNLOAD"]:
-            return None, None
-        if filename == "":
-            return None, None
-
-        return command, filename
-    except Exception:
-        return None, None
-
-
-def generate_session_id(used_ids):
-    while True:
-        sid = random.randint(1, 65535)
-        if sid not in used_ids:
-            return sid
-
+        if command not in ["UPLOAD", "DOWNLOAD", "CONNECT"]:
+            return None, None, 0
+        return command, filename, filesize
+    except:
+        return None, None, 0
 
 def main():
-    server_addr = (SERVER_IP, SERVER_PORT)
-    print(f"-> Server starting on {server_addr}")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((SERVER_IP, SERVER_PORT))
+    Logger.info(f"Server started on {SERVER_IP}:{SERVER_PORT}")
+    print(f"Waiting for client connections...")
+
+    control_thread = threading.Thread(target=server_console_loop, daemon=True)
+    control_thread.start()
 
     sessions = {}
     used_session_ids = set()
 
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.bind(server_addr)
-        sock.settimeout(TIMEOUT)
-
-        while True:
+    while True:
+        try:
+            sock.settimeout(1.0)
             try:
                 data, client_addr = sock.recvfrom(4096)
             except socket.timeout:
@@ -80,74 +124,92 @@ def main():
             if not packet:
                 continue
 
-            # HANDSHAKE
-            if packet.is_syn():
-                command, filename = parse_syn_payload(packet.payload)
+            if packet.packet_type == PacketType.SYN:
+                command, filename, filesize = parse_syn_payload(packet.payload)
 
-                if not command:
-                    print(f"XX Invalid SYN payload from {client_addr}. Sending ERROR.")
-                    err_packet = create_error_packet(0, ErrorCode.UNKNOWN_PACKET_TYPE)
-                    sock.sendto(err_packet.pack(), client_addr)
+                if command == "CONNECT":
+                    session_id = random.randint(1000, 9999)
+                    while session_id in used_session_ids:
+                        session_id = random.randint(1000, 9999)
+                        
+                    sessions[client_addr] = session_id
+                    used_session_ids.add(session_id)
+                    
+                    syn_ack = create_syn_ack_packet(session_id, 0)
+                    Logger.sent(syn_ack)
+                    sock.sendto(syn_ack.pack(), client_addr)
+                    Logger.info(f"Connection Complete. Client {client_addr} connected. Session: {session_id}")
                     continue
-
-                session_id = generate_session_id(used_session_ids)
-                used_session_ids.add(session_id)
-                sessions[client_addr] = session_id
-
-                print("\n<- SYN received")
-                print(f"   From: {client_addr}")
-                print(f"   Request: {command} | File: {filename}")
-                print(f"   Assigned Session ID: {session_id}")
-
-                syn_ack = create_syn_ack_packet(session_id=session_id, sequence_number=0)
-                sock.sendto(syn_ack.pack(), client_addr)
-                print("-> Sent SYN-ACK")
-
-                # FILE OPERATION
-                if command == "UPLOAD":
-                    save_name = f"uploaded_{os.path.basename(filename)}"
-                    ok = receive_file(sock, save_name, session_id, client_addr)
-
-                    if ok:
-                        print(f"-> Upload complete. Saved as '{save_name}'")
-                    else:
-                        print("XX Upload failed.")
-
-                    sessions.pop(client_addr, None)
-                    used_session_ids.discard(session_id)
-                    continue
-
-                if command == "DOWNLOAD":
-                    if not os.path.exists(filename):
-                        print(f"XX File '{filename}' not found. Sending ERROR.")
-                        err_packet = create_error_packet(session_id, ErrorCode.FILE_NOT_FOUND)
-                        sock.sendto(err_packet.pack(), client_addr)
-
+                
+                if command == "DISCONNECT":
+                    known_session = sessions.get(client_addr)
+                    if known_session == packet.session_id:
+                        Logger.info(f"Client {client_addr} disconnected. Session {known_session} closed.")
                         sessions.pop(client_addr, None)
-                        used_session_ids.discard(session_id)
+                        used_session_ids.discard(packet.session_id)
+                        print(f"Waiting for client connections...")
+                    continue
+
+                if command in ["UPLOAD", "DOWNLOAD"]:
+                    if packet.session_id not in used_session_ids or sessions.get(client_addr) != packet.session_id:
+                        Logger.error(f"XX Transfer request from unauthorized session. Sending ERROR.")
+                        err_packet = create_error_packet(packet.session_id, ErrorCode.SESSION_MISMATCH)
+                        Logger.sent(err_packet)
+                        sock.sendto(err_packet.pack(), client_addr)
                         continue
 
-                    ok = send_file(sock, filename, session_id, client_addr)
+                    session_id = packet.session_id
 
-                    if ok:
-                        print("-> Download complete.")
-                    else:
-                        print("XX Download failed.")
+                    if command == "UPLOAD":
+                        Logger.info(f"Agreed on UPLOAD for '{filename}' ({filesize} bytes).")
+                        syn_ack = create_syn_ack_packet(session_id, 0)
+                        Logger.sent(syn_ack)
+                        sock.sendto(syn_ack.pack(), client_addr)
 
-                    sessions.pop(client_addr, None)
-                    used_session_ids.discard(session_id)
-                    continue
+                        ok = receive_file(sock, filename, session_id, client_addr)
+                        if ok: Logger.info("Upload complete.")
+                        else: Logger.error("Upload failed.")
 
-            # SESSION CHECK for non-SYN packets
+                        continue
+
+                    if command == "DOWNLOAD":
+                        if not os.path.exists(filename):
+                            Logger.error(f"XX File '{filename}' not found. Sending ERROR.")
+                            err_packet = create_error_packet(session_id, ErrorCode.FILE_NOT_FOUND)
+                            Logger.sent(err_packet)
+                            sock.sendto(err_packet.pack(), client_addr)
+
+                            continue
+
+                        server_filesize = os.path.getsize(filename)
+                        Logger.info(f"Agreed on DOWNLOAD for '{filename}' ({server_filesize} bytes).")
+                        
+                        syn_ack = create_syn_ack_packet(session_id, 0, str(server_filesize).encode("utf-8"))
+                        Logger.sent(syn_ack)
+                        sock.sendto(syn_ack.pack(), client_addr)
+
+                        ok = send_file(sock, filename, session_id, client_addr)
+                        if ok: Logger.info("Download complete.")
+                        else: Logger.error("Download failed.")
+
+                        continue
+
             known_session = sessions.get(client_addr)
             if known_session is None or packet.session_id != known_session:
-                print(f"XX Session mismatch from {client_addr}. Sending ERROR.")
+                Logger.error(f"XX Session mismatch from {client_addr}. Sending ERROR.")
                 err_packet = create_error_packet(packet.session_id, ErrorCode.SESSION_MISMATCH)
+                Logger.sent(err_packet)
                 sock.sendto(err_packet.pack(), client_addr)
                 continue
 
-            print(f"!! Unexpected packet from {client_addr}: {packet}")
+            Logger.warn(f"!! Unexpected packet from {client_addr}: {packet}")
 
+        except KeyboardInterrupt:
+            Logger.info("\n-> Server shutting down (Ctrl+C detected). Goodbye!")
+            break
+            
+        except Exception as e:
+            Logger.error(f"!! Server Error: {e}")
 
 if __name__ == "__main__":
     main()
