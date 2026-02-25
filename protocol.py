@@ -115,11 +115,11 @@ class Packet:
     
     # Unpack bytes into a Packet object, validating the header and payload
     @classmethod
-    def unpack(cls, data):
+    def unpack(cls, data: bytes):
         if len(data) < cls.HEADER_SIZE:
            return None # Not enough data to unpack the header, indicating a malformed packet
        
-        header = data[:cls.HEADER_SIZE]
+        header = data[: cls.HEADER_SIZE]
         packet_type, session_id, sequence_number, payload_length, checksum = struct.unpack(cls.HEADER_FORMAT, header)
         
         if len(data) < cls.HEADER_SIZE + payload_length:

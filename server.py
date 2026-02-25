@@ -18,19 +18,13 @@ This file works together with protocol.py for packet creation and parsing, engin
 
 """
 
-# Python Library imports
 import socket
 import os
 import random
 import threading
 import config
 
-<<<<<<< Updated upstream
-# Local imports
-from config import SERVER_IP, SERVER_PORT, TIMEOUT
-=======
 from config import SERVER_IP, SERVER_PORT
->>>>>>> Stashed changes
 from protocol import (
     Packet, ErrorCode, PacketType, Logger,
     create_syn_ack_packet,
@@ -88,47 +82,17 @@ def server_console_loop():
 
 def parse_syn_payload(payload):
     
-<<<<<<< Updated upstream
-    # Expected SYN payload: "UPLOAD|filename" "DOWNLOAD|filename"
-    # Returns: command, filename (or None, None if invalid)
-    
-=======
     if payload == b"CONNECT":
         return "CONNECT", None, 0
     if payload == b"DISCONNECT":
         return "DISCONNECT", None, 0
->>>>>>> Stashed changes
     try:
         text = payload.decode("utf-8")
         parts = text.split("|")
 
         command = parts[0].strip().upper()
-<<<<<<< Updated upstream
-        filename = parts[1].strip()
-
-        if command not in ["UPLOAD", "DOWNLOAD"]:
-            return None, None
-
-        if filename == "":
-            return None, None
-
-        return command, filename
-    except Exception:
-        return None, None
-
-
-def generate_session_id(used_ids):
- 
-    # Generates a random 16-bit session ID 
-  
-    while True:
-        sid = random.randint(1, 65535)
-        if sid not in used_ids:
-            return sid
-=======
         filename = parts[1].strip() if len(parts) > 1 else ""
         filesize = int(parts[2].strip()) if len(parts) > 2 else 0
->>>>>>> Stashed changes
 
         if command not in ["UPLOAD", "DOWNLOAD", "CONNECT"]:
             return None, None, 0
@@ -145,7 +109,6 @@ def main():
     control_thread = threading.Thread(target=server_console_loop, daemon=True)
     control_thread.start()
 
-    # Sessions tracked by client (ip, port) -> session_id
     sessions = {}
     used_session_ids = set()
 
@@ -161,26 +124,8 @@ def main():
             if not packet:
                 continue
 
-<<<<<<< Updated upstream
-             
-            # HANDSHAKE  
-            if packet.is_syn():
-                # Special case: DISCOVER broadcast
-                raw_text = packet.payload.decode("utf-8", errors="ignore").strip().upper()
-                if raw_text == "DISCOVER":
-                    print(f"\n<- DISCOVER received from {client_addr}")
-                    # Reply with SYN-ACK so the client can detect the server
-                    sid = generate_session_id(used_session_ids)
-                    syn_ack = create_syn_ack_packet(session_id=sid, sequence_number=0)
-                    sock.sendto(syn_ack.pack(), client_addr)
-                    print("-> Sent SYN-ACK (DISCOVER reply)")
-                    continue
-
-                command, filename = parse_syn_payload(packet.payload)
-=======
             if packet.packet_type == PacketType.SYN:
                 command, filename, filesize = parse_syn_payload(packet.payload)
->>>>>>> Stashed changes
 
                 if command == "CONNECT":
                     session_id = random.randint(1000, 9999)
@@ -195,49 +140,11 @@ def main():
                     sock.sendto(syn_ack.pack(), client_addr)
                     Logger.info(f"Connection Complete. Client {client_addr} connected. Session: {session_id}")
                     continue
-<<<<<<< Updated upstream
-
-                session_id = generate_session_id(used_session_ids)
-                used_session_ids.add(session_id)
-                sessions[client_addr] = session_id
-
-                print("\n<- SYN received")
-                print(f"   From: {client_addr}")
-                print(f"   Request: {command} | File: {filename}")
-                print(f"   Assigned Session ID: {session_id}")
-
-                syn_ack = create_syn_ack_packet(session_id=session_id, sequence_number=0)
-                sock.sendto(syn_ack.pack(), client_addr)
-                print("-> Sent SYN-ACK")
-
-      
-                # FILE OPERATION 
-                if command == "UPLOAD":
-                    save_name = f"uploaded_{os.path.basename(filename)}"
-                    ok = receive_file(sock, save_name, session_id, client_addr)
-
-                    if ok:
-                        print(f"-> Upload complete. Saved as '{save_name}'")
-                    else:
-                        print("XX Upload failed.")
-
-                    sessions.pop(client_addr, None)
-                    used_session_ids.discard(session_id)
-                    continue
-
-                if command == "DOWNLOAD":
-                    if not os.path.exists(filename):
-                        print(f"XX File '{filename}' not found. Sending ERROR.")
-                        err_packet = create_error_packet(session_id, ErrorCode.FILE_NOT_FOUND)
-                        sock.sendto(err_packet.pack(), client_addr)
-
-=======
                 
                 if command == "DISCONNECT":
                     known_session = sessions.get(client_addr)
                     if known_session == packet.session_id:
                         Logger.info(f"Client {client_addr} disconnected. Session {known_session} closed.")
->>>>>>> Stashed changes
                         sessions.pop(client_addr, None)
                         used_session_ids.discard(packet.session_id)
                         print(f"Waiting for client connections...")
@@ -259,13 +166,6 @@ def main():
                         Logger.sent(syn_ack)
                         sock.sendto(syn_ack.pack(), client_addr)
 
-<<<<<<< Updated upstream
-                    sessions.pop(client_addr, None)
-                    used_session_ids.discard(session_id)
-                    continue
- 
-            # SESSION MISMATCH CHECK
-=======
                         ok = receive_file(sock, filename, session_id, client_addr)
                         if ok: Logger.info("Upload complete.")
                         else: Logger.error("Upload failed.")
@@ -294,7 +194,6 @@ def main():
 
                         continue
 
->>>>>>> Stashed changes
             known_session = sessions.get(client_addr)
             if known_session is None or packet.session_id != known_session:
                 Logger.error(f"XX Session mismatch from {client_addr}. Sending ERROR.")
@@ -303,12 +202,7 @@ def main():
                 sock.sendto(err_packet.pack(), client_addr)
                 continue
 
-<<<<<<< Updated upstream
-            # DATA/ACK/FIN should be handled inside engine.send_file/receive_file
-            print(f"!! Unexpected packet from {client_addr}: {packet}")
-=======
             Logger.warn(f"!! Unexpected packet from {client_addr}: {packet}")
->>>>>>> Stashed changes
 
         except KeyboardInterrupt:
             Logger.info("\n-> Server shutting down (Ctrl+C detected). Goodbye!")
